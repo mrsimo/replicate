@@ -22,6 +22,7 @@ module Replicate
     # block  - Dump context block. If given, the end of the block's execution
     #          is assumed to be the end of the dump stream.
     def initialize(io=nil)
+      @seen = Hash.new { |hash,k| hash[k] = {} }
       @memo = Hash.new { |hash,k| hash[k] = {} }
       super() do
         marshal_to io if io
@@ -76,7 +77,8 @@ module Replicate
       end
       objects = objects[0] if objects.size == 1 && objects[0].respond_to?(:to_ary)
       objects.each do |object|
-        next if object.nil? || dumped?(object)
+        next if object.nil? || dumped?(object) || seen?(object)
+        see!(object)
         if object.respond_to?(:dump_replicant)
           args = [self]
           args << opts unless object.method(:dump_replicant).arity == 1
@@ -87,8 +89,8 @@ module Replicate
       end
     end
 
-    # Check if object has been written yet.
-    def dumped?(object)
+    # type and id helper
+    def type_and_id(object)
       if object.respond_to?(:replicant_id)
         type, id = object.replicant_id
       elsif object.is_a?(Array)
@@ -96,7 +98,21 @@ module Replicate
       else
         return false
       end
-      @memo[type.to_s][id]
+      yield type, id
+    end
+    
+    # Check if object has been written yet.
+    def dumped?(object)
+      type_and_id(object) { |type,id| @memo[type.to_s][id] }
+    end
+    
+    # Check if object has been seen yet (needed for loop prevention)
+    def seen?(object)
+      type_and_id(object) { |type,id| @seen[type.to_s][id] }  
+    end
+    
+    def see!(object)
+      type_and_id(object) { |type,id| @seen[type.to_s][id] = true }  
     end
 
     # Called exactly once per unique type and id. Emits to all listeners.
@@ -111,6 +127,7 @@ module Replicate
       type = type.to_s
       return if dumped?([type, id])
       @memo[type][id] = true
+      @seen[type].delete(id)
 
       emit type, id, attributes, object
     end
